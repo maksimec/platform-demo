@@ -1,0 +1,22 @@
+# Git
+.git
+.gitignore
+
+# Environment files
+.env
+.env.*
+!.env.example
+.env.ci
+
+# Development
+*.md
+
+# IDE
+.idea
+.vscode
+*.swp
+*.swo
+
+# CI artifacts
+.gitlab-ci.yml
+docker-compose.ci.yml

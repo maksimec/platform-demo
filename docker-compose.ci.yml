@@ -1,0 +1,16 @@
+services:
+  catalog-service:
+    ports:
+      - "${CATALOG_PORT}:${CATALOG_PORT}"
+
+  order-service:
+    ports:
+      - "${ORDER_PORT}:${ORDER_PORT}"
+
+  login-service:
+    ports:
+      - "${AUTH_PORT}:${AUTH_PORT}"
+
+  frontend:
+    ports:
+      - "${FRONTEND_PORT}:${FRONTEND_PORT}"
