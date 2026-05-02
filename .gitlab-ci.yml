@@ -5,6 +5,7 @@ stages:
 
 variables:
   MONITORING_IMAGE: $REGISTRY_HOST/bookstore/monitoring
+  COMPOSE_CMD: "docker compose -f docker-compose.yml -f docker-compose.ci.yml --env-file .env.ci"
 
 validate-compose:
   stage: validate
@@ -16,10 +17,27 @@ validate-compose:
     DOCKER_TLS_CERTDIR: "/certs"
   script:
     - cp .env.example .env
-    - docker compose config
+    - docker compose config --quiet
+    - |
+      echo "=== Validating .env.example has all required variables ==="
+      for var in LETSENCRYPT_EMAIL BOOKSTORE_DOMAIN POSTGRES_DB POSTGRES_USER \
+                 POSTGRES_PASSWORD JWT_SECRET JWT_ALGORITHM SESSION_SECRET \
+                 FRONTEND_PORT CATALOG_PORT ORDER_PORT AUTH_PORT; do
+        grep -q "^${var}=" .env.example || { echo "MISSING: ${var}"; exit 1; }
+      done
+      echo "All required variables present"
+
+shellcheck:
+  stage: validate
+  image: koalaman/shellcheck-alpine:v0.10.0
+  script:
+    - shellcheck monitoring/*.sh
 
 build-monitoring:
   stage: build
+  needs:
+    - validate-compose
+    - shellcheck
   image: docker:27
   services:
     - docker:27-dind
@@ -37,6 +55,9 @@ build-monitoring:
 
 integration:
   stage: integration
+  needs:
+    - validate-compose
+    - shellcheck
   image: docker:27
   services:
     - docker:27-dind
@@ -45,7 +66,6 @@ integration:
     DOCKER_TLS_CERTDIR: "/certs"
   before_script:
     - echo "$REGISTRY_PASSWORD" | docker login "$REGISTRY_HOST" -u "$REGISTRY_USER" --password-stdin
-    - apk add --no-cache curl
   script:
     - |
       cat > .env.ci << 'EOF'
@@ -63,30 +83,48 @@ integration:
       FRONTEND_PORT=3000
       EOF
       echo "REGISTRY_HOST=$REGISTRY_HOST" >> .env.ci
-    - docker compose -f docker-compose.yml -f docker-compose.ci.yml --env-file .env.ci up -d postgres redis
+
+    - $COMPOSE_CMD up -d postgres redis
+
     - |
-      echo "=== Waiting for postgres to be healthy ==="
+      echo "=== Waiting for postgres ==="
       for i in $(seq 1 20); do
-        docker compose -f docker-compose.yml -f docker-compose.ci.yml --env-file .env.ci exec -T postgres \
-          psql -U testuser -d testdb -c "SELECT COUNT(*) FROM books" 2>/dev/null && break
-        echo "[$i/20] Postgres not ready, waiting 3s..."
+        STATUS=$(docker inspect --format='{{.State.Health.Status}}' bookstore-postgres 2>/dev/null || true)
+        [ "$STATUS" = "healthy" ] && echo "postgres healthy" && break
+        echo "[$i/20] postgres status=${STATUS:-n/a}, waiting 3s..."
         sleep 3
+        if [ "$i" = "20" ]; then
+          echo "=== TIMEOUT: postgres ==="
+          $COMPOSE_CMD logs postgres
+          exit 1
+        fi
       done
-    - docker compose -f docker-compose.yml -f docker-compose.ci.yml --env-file .env.ci up -d catalog-service order-service login-service frontend
+
+    - $COMPOSE_CMD up -d catalog-service order-service login-service frontend
+
     - |
-      echo "=== Waiting for services to be ready ==="
-      for svc in "docker:5001/health" "docker:5002/health" "docker:5003/health" "docker:3000/health"; do
+      echo "=== Waiting for application services ==="
+      for svc in catalog-service order-service login-service frontend; do
+        cname=$($COMPOSE_CMD ps -q "$svc" 2>/dev/null | head -1)
+        if [ -z "$cname" ]; then
+          echo "ERROR: cannot resolve container ID for $svc"
+          $COMPOSE_CMD logs "$svc"
+          exit 1
+        fi
         for i in $(seq 1 30); do
-          curl -sf "http://$svc" && echo "$svc OK" && break
-          echo "[$i/30] http://$svc not ready, waiting 3s..."
+          STATUS=$(docker inspect --format='{{.State.Health.Status}}' "$cname" 2>/dev/null || true)
+          [ "$STATUS" = "healthy" ] && echo "$svc is healthy" && break
+          echo "[$i/30] $svc status=${STATUS:-n/a}, waiting 3s..."
           sleep 3
           if [ "$i" = "30" ]; then
-            echo "=== TIMEOUT: $svc — printing logs ==="
-            docker compose -f docker-compose.yml -f docker-compose.ci.yml --env-file .env.ci logs
+            echo "=== TIMEOUT: $svc ==="
+            $COMPOSE_CMD logs "$svc"
             exit 1
           fi
         done
       done
-    - docker compose -f docker-compose.yml -f docker-compose.ci.yml --env-file .env.ci down -v
+
+    - echo "=== All services healthy — integration passed ==="
+    - $COMPOSE_CMD down -v
   rules:
     - if: $CI_COMMIT_BRANCH == "main"

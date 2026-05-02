@@ -88,6 +88,12 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://localhost:${CATALOG_PORT}/health')\" || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 15s
     deploy:
       resources:
         limits:
@@ -105,6 +111,12 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "node -e \"require('http').get('http://localhost:${ORDER_PORT}/health', r => process.exit(r.statusCode === 200 ? 0 : 1)).on('error', () => process.exit(1))\""]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 15s
     deploy:
       resources:
         limits:
@@ -123,6 +135,12 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://localhost:${AUTH_PORT}/health')\" || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 15s
     deploy:
       resources:
         limits:
@@ -138,6 +156,12 @@ services:
       PORT: ${FRONTEND_PORT}
       CATALOG_SERVICE_URL: http://catalog-service:${CATALOG_PORT}
       ORDER_SERVICE_URL: http://order-service:${ORDER_PORT}
+    healthcheck:
+      test: ["CMD-SHELL", "node -e \"require('http').get('http://localhost:${FRONTEND_PORT}/health', r => process.exit(r.statusCode === 200 ? 0 : 1)).on('error', () => process.exit(1))\""]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 15s
     deploy:
       resources:
         limits:
